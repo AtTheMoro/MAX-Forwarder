@@ -1,0 +1,3 @@
+maxapi-python
+aiogram
+httpx
