@@ -27,11 +27,17 @@ CUSTOM_FILE = Path(__file__).parent / "custom_names.json"
 TG_NAMES_FILE = Path(__file__).parent / "tg_names.json"
 MAP_FILE = Path(__file__).parent / "msg_map.json"
 
-name_cache: dict = json.loads(CACHE_FILE.read_text()) if CACHE_FILE.exists() else {}
-custom_names: dict = json.loads(CUSTOM_FILE.read_text()) if CUSTOM_FILE.exists() else {}
-tg_names: dict = {k: v for k, v in json.loads(TG_NAMES_FILE.read_text()).items() if not k.startswith("_")} if TG_NAMES_FILE.exists() else {}
+for f in (CACHE_FILE, CUSTOM_FILE, TG_NAMES_FILE):
+    if not f.exists():
+        f.write_text("{}")
+if not MAP_FILE.exists():
+    MAP_FILE.write_text('{"m2t": {}, "t2m": {}}')
 
-_map = json.loads(MAP_FILE.read_text()) if MAP_FILE.exists() else {"m2t": {}, "t2m": {}}
+name_cache: dict = json.loads(CACHE_FILE.read_text())
+custom_names: dict = json.loads(CUSTOM_FILE.read_text())
+tg_names: dict = {k: v for k, v in json.loads(TG_NAMES_FILE.read_text()).items() if not k.startswith("_")}
+
+_map = json.loads(MAP_FILE.read_text())
 max_to_tg: dict[str, int] = _map["m2t"]
 tg_to_max: dict[int, str] = {int(k): v for k, v in _map["t2m"].items()}
 
