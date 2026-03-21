@@ -1,4 +1,6 @@
 # MAX-Forwarder
+> [!WARNING]  
+> Может блокировать аккаунт
 
 Форвардит сообщения из группы [Max](https://max.ru) в Telegram и обратно. Работает как userbot через WebSocket без официального бота API.
 
