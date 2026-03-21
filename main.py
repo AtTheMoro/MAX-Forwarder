@@ -212,22 +212,6 @@ async def forward_to_max(name, text, reply_to_max_id=None):
         reply_to=int(reply_to_max_id) if reply_to_max_id else None
     )
 
-@dp.message(Command("send"))
-async def tg_send_text(msg: TgMessage):
-    if MUTE:
-        await msg.reply("🔇 Бот в режиме mute")
-        return
-    text = msg.text.removeprefix("/send").strip()
-    if not text:
-        await msg.reply("Использование: /send текст (Не работает)")
-        return
-    if not client.is_connected:
-        await msg.reply("❌ Макс не подключён")
-        return
-    name = tg_display_name(msg)
-    reply_to_max_id = tg_to_max.get(msg.reply_to_message.message_id) if msg.reply_to_message else None
-    await forward_to_max(name, text, reply_to_max_id)
-    await msg.reply("✅")
 
 @dp.message(F.photo)
 async def tg_send_photo(msg: TgMessage):
