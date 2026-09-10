@@ -89,16 +89,12 @@ def get_name(sender_id: int) -> str:
             name_queue.put_nowait(sender_id)
         except Exception:
             pass
-    # FIX (bug #5): если резолвнутое имя оказалось пустой строкой (у юзера
-    # нет first/last name), раньше отдавали "" вместо фолбэка на id — в TG
-    # прилетало сообщение с пустым <b></b> заголовком.
+    # если имя пустое (юзер без first/last) - отдаём id, а не пустую строку
     return name_cache.get(key) or str(sender_id)
 
 def tg_display_name(msg: TgMessage) -> str:
     u = msg.from_user
-    # FIX (bug #3): у анонимных админов групп from_user == None, было
-    # необработанное AttributeError на u.id / u.full_name.
-    if u is None:
+    if u is None:  # аноним-админ в группе
         return "Аноним"
 
     if str(u.id) in tg_names:
@@ -166,8 +162,7 @@ async def send_to_tg(msg_data: dict):
         if text:
             tg_id = await tg_text(name, text, reply_to_tg_id)
         elif attaches:
-            # FIX (bug #4): раньше стикеры/войсы/гифки/геолокации (тип не
-            # PHOTO/VIDEO/FILE) без текста терялись молча, без единого следа.
+            # стикер/войс/etc без текста - раньше просто терялся молча
             kinds = ", ".join(
                 str(a.get('_type') or a.get('type', '?')).upper() for a in attaches
             )
