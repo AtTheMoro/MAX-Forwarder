@@ -89,10 +89,17 @@ def get_name(sender_id: int) -> str:
             name_queue.put_nowait(sender_id)
         except Exception:
             pass
-    return name_cache.get(key, str(sender_id))
+    # FIX (bug #5): если резолвнутое имя оказалось пустой строкой (у юзера
+    # нет first/last name), раньше отдавали "" вместо фолбэка на id — в TG
+    # прилетало сообщение с пустым <b></b> заголовком.
+    return name_cache.get(key) or str(sender_id)
 
 def tg_display_name(msg: TgMessage) -> str:
     u = msg.from_user
+    # FIX (bug #3): у анонимных админов групп from_user == None, было
+    # необработанное AttributeError на u.id / u.full_name.
+    if u is None:
+        return "Аноним"
 
     if str(u.id) in tg_names:
         return tg_names[str(u.id)]
@@ -158,6 +165,13 @@ async def send_to_tg(msg_data: dict):
     else:
         if text:
             tg_id = await tg_text(name, text, reply_to_tg_id)
+        elif attaches:
+            # FIX (bug #4): раньше стикеры/войсы/гифки/геолокации (тип не
+            # PHOTO/VIDEO/FILE) без текста терялись молча, без единого следа.
+            kinds = ", ".join(
+                str(a.get('_type') or a.get('type', '?')).upper() for a in attaches
+            )
+            tg_id = await tg_text(name, f"[неподдерживаемое вложение: {kinds}]", reply_to_tg_id)
 
     if tg_id and max_id:
         max_to_tg[max_id] = tg_id
@@ -284,4 +298,5 @@ async def main():
     asyncio.create_task(dp.start_polling(bot, allowed_updates=["message"]))
     await client.start()
 
-asyncio.run(main())
+if __name__ == "__main__":
+    asyncio.run(main())
