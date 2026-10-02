@@ -1,90 +1,147 @@
 # MAX-Forwarder
-> [!WARNING]  
+> [!WARNING]
 > Может блокировать аккаунт
 
-Форвардит сообщения из группы [Max](https://max.ru) в Telegram и обратно. Работает как userbot через WebSocket без официального бота API.
+Форвардит сообщения из группы [Max](https://max.ru) в Telegram и обратно. MAX — через userbot на [PyMax](https://github.com/MaxApiTeam/PyMax) (без официального бот-API), Telegram — через обычного бота.
 
-> Вдохновлен идеей от [Sharkow1743/SferumTransferBot](https://github.com/Sharkow1743/SferumTransferBot) 
+Можно запускать одним процессом на одной машине, а можно разнести на две:
+**Telegram-половина за рубежом, MAX-половина в РФ**. Код один, кто есть кто задаётся в `config.py`.
+
+> Вдохновлен идеей от [Sharkow1743/SferumTransferBot](https://github.com/Sharkow1743/SferumTransferBot)
 
 ## Что умеет
 
-- Макс → Telegram: текст, фото, видео, файлы, ответы на сообщения
-- Telegram → Макс: текст, фото. 
-> <small> ответы на сообщения из MAX в Telegram не видно </small>
-- Кастомные имена для пользователей Макса и Telegram
-- Режим `--mute` (только Макс → TG)
+| | MAX → Telegram | Telegram → MAX |
+|---|---|---|
+| Текст + форматирование (жирный, курсив, ссылки, код…) | ✅ | ✅ |
+| Фото | ✅ | ✅ |
+| Видео | ✅ | ✅ (GIF уходят как видео) |
+| Кружки (видеосообщения) | ✅ | ✅ (перекодируются ffmpeg) |
+| Голосовые | ✅ | ✅ (перекодируются ffmpeg) |
+| Файлы, музыка | ✅ | ✅ (музыка — файлом) |
+| Стикеры | картинкой | статичные — картинкой, анимированные — текстом |
+| Ответы на сообщения | ✅ | ✅ |
+| Пересланные сообщения | ✅ с пометкой «Переслано от…» | ✅ с пометкой |
+| Опросы, контакты, геопозиция | текстом | текстом |
+
+- Кастомные имена для пользователей MAX и Telegram
+- Режим `--mute` (только MAX → TG)
+- Догоняет пропущенные сообщения MAX после переподключения
+- Ограничение Telegram-ботов: файлы из TG больше 20 МБ бот скачать не может, в TG — не больше 50 МБ
+
+## Как это устроено
+
+```
+ROLE = "both" — одна машина:
+
+  Telegram ⇄ [ TG-половина ⇄ MAX-половина ] ⇄ MAX
+
+ROLE = "tg" + ROLE = "max" — две машины:
+
+  Telegram ⇄ [ TG-половина ] ⇄── wss + секрет ──⇄ [ MAX-половина ] ⇄ MAX
+              сервер за рубежом                    машина в РФ
+              (LINK_LISTEN)                        (LINK_URL)
+```
+
+- Токен Telegram-бота живёт только на зарубежной машине, сессия MAX — только на российской.
+- Медиа качаются на той стороне, где они доступны, и едут по связке байтами.
+- Если связь между нодами пропала, сообщения копятся в очереди и досылаются после переподключения.
 
 ## Требования
 
 - Python 3.11+
-- Аккаунт в Max
-- Telegram бот токен (через @BotFather)
+- `ffmpeg` на MAX-машине — без него голосовые и кружки из Telegram в MAX могут не пройти
+- Аккаунт в MAX
+- Telegram-бот (через [@BotFather](https://t.me/BotFather))
 
 ## Установка
 
-### Linux / macOS
-
 ```bash
 git clone https://github.com/AtTheMoro/MAX-Forwarder
-cd Max-Forwarder
+cd MAX-Forwarder
 pip install -r requirements.txt
-```
-
-### Windows
-
-```bash
-git clone https://github.com/AtTheMoro/MAX-Forwarder
-cd Max-Forwarder
-pip install -r requirements.txt
+cp config.example.py config.py && chmod 600 config.py
+sudo apt install ffmpeg      # Debian/Ubuntu; на macOS: brew install ffmpeg
 ```
 
 ## Настройка
 
-### 1. Получить MAX токен (Описано на примере Firefox-Based браузеров)
+Все настройки в `config.py` (копия `config.example.py`, в git не попадает), каждая подписана. Минимум зависит от роли:
 
-1. Зайдите на [web.max.ru](https://web.max.ru) и авторизуйтесь
-2. Откройте DevTools: `F12`
-3. Перейдите в **Хранилище** (Storage) → **Локальное хранилище** → `https://web.max.ru`
-4. Найдите ключ `__oneme_auth` и скопируйте значение поля `token` из JSON
+| Роль | Что заполнить |
+|---|---|
+| `both` | `MAX_*`, `TG_*` |
+| `tg` (за рубежом) | `TG_TOKEN`, `TG_CHAT_ID`, `LINK_*` |
+| `max` (в РФ) | `MAX_*`, `LINK_*` |
 
-### 2. Получить Telegram токен
+### 1. Вход в MAX
 
-1. Напишите [@BotFather](https://t.me/BotFather) в Telegram
-2. `/newbot` → придумайте имя → придумайте юзернейм → получите токен
-3. Добавьте бота в нужную TG группу
-4. Отключите Privacy Mode: BotFather → `/mybots` → Bot Settings → Group Privacy → Turn off
+Три варианта, `MAX_AUTH` в конфиге:
 
-### 3. Узнать chat ID группы Макс
+- **`qr`** (по умолчанию, если `MAX_TOKEN` пустой). При первом запуске в консоли появится QR-код — отсканируй его в приложении MAX: **Настройки → Устройства → Войти по QR-коду**.
+- **`token`** — токен из веб-версии:
+  1. Зайди на [web.max.ru](https://web.max.ru) и авторизуйся
+  2. Открой DevTools (`F12`) → **Хранилище** (Storage) → **Локальное хранилище** → `https://web.max.ru`
+  3. Найди ключ `__oneme_auth` и скопируй значение поля `token` в `MAX_TOKEN`
+- **`sms`** — вход по SMS как с телефона, нужен `MAX_PHONE`. Код спросит в консоли.
 
-Откройте нужную группу на web.max.ru — в адресной строке будет например `https://web.max.ru/-54321098765432`, число и есть ID.
+Сессия сохраняется в папку `max_session/`, дальше вход не нужен. Чтобы перелогиниться, удали эту папку.
 
-### 4. Узнать chat ID Telegram группы
+### 2. Telegram-бот
 
-Напишите @userinfobot и скиньте группу, получите ID.
-### Или
-Напишите боту `/start` в группе, затем:
+1. [@BotFather](https://t.me/BotFather) → `/newbot` → получи токен в `TG_TOKEN`
+2. Добавь бота в группу
+3. Отключи Privacy Mode: BotFather → `/mybots` → Bot Settings → Group Privacy → Turn off
+4. Напиши в группе `/chatid` — бот ответит ID чата, его в `TG_CHAT_ID`
+
+### 3. ID чата MAX
+
+Открой группу на web.max.ru — в адресной строке будет, например, `https://web.max.ru/-54321098765432`, число и есть `MAX_CHAT_ID`.
+
+## Запуск на одной машине
+
+Подходит, если с машины доступны и MAX, и Telegram (например, Telegram через прокси — `TG_PROXY`).
+
 ```bash
-curl "https://api.telegram.org/bot<TOKEN>/getUpdates"
+python3 main.py            # двусторонний режим
+python3 main.py --mute     # только MAX → Telegram
 ```
-В ответе найдите `"chat":{"id":...}`.
 
-### 5. Создать config.py
+## Запуск на двух машинах (TG за рубежом, MAX в РФ)
+
+**Пошаговый гайд с безопасной настройкой — [DEPLOY.md](DEPLOY.md).** Там же расписано, как всё работает. Коротко:
+
+1. Зарубежный сервер A слушает порт (`ROLE = "tg"`, `LINK_LISTEN`). Машина в РФ B сама к нему подключается (`ROLE = "max"`, `LINK_URL`). На B входящие порты не нужны.
+2. Связка идёт только по TLS. Сертификат самоподписанный, B доверяет только ему (`LINK_TLS_CA`), так что подменить сервер нельзя.
+3. Дальше три замка: общий секрет на 256 бит (`LINK_SECRET`), белый список IP (`LINK_ALLOW_IPS`) и фаервол на A.
+4. Каждый сервер запускается под отдельным пользователем в systemd-песочнице.
+
+Пример конфигов:
 
 ```python
-MAX_TOKEN = "твой_токен_из___oneme_auth"
-MAX_PHONE = "+7XXXXXXXXXX"  # номер телефона аккаунта Max
-MAX_CHAT_ID =  # ID группы в Max
-MAX_SELF_ID = 211565775  # viewerId из __oneme_auth (опционально)
-
+# A — за рубежом
+ROLE = "tg"
 TG_TOKEN = "1234567890:AAF..."
-TG_CHAT_ID = "-123232323"  # ID группы в Telegram
+TG_CHAT_ID = "-100123456789"
+LINK_LISTEN = "0.0.0.0:8443"
+LINK_SECRET = "секрет"            # python3 -c "import secrets; print(secrets.token_urlsafe(32))"
+LINK_TLS_CERT = "link.crt"
+LINK_TLS_KEY = "link.key"
+LINK_ALLOW_IPS = ["B.B.B.B"]
+
+# B — в РФ
+ROLE = "max"
+MAX_CHAT_ID = -54321098765432
+LINK_URL = "wss://A.A.A.A:8443/link"
+LINK_SECRET = "секрет"
+LINK_TLS_CA = "link.crt"          # копия сертификата с A (без ключа!)
 ```
 
 ## Кастомные имена
 
-### Пользователи Макса (`custom_names.json`)
+### Пользователи MAX (`custom_names.json`)
 
-Переопределяет автоматически определённые имена:
+Переопределяет автоматически определённые имена. ID берётся из `names.json`, который заполняется сам. Файл нужен на MAX-машине.
 
 ```json
 {
@@ -92,11 +149,9 @@ TG_CHAT_ID = "-123232323"  # ID группы в Telegram
 }
 ```
 
-ID берётся из `names.json` который заполняется автоматически при работе.
-
 ### Пользователи Telegram (`tg_names.json`)
 
-Имя которое будет показываться в Максе когда человек пишет из TG:
+Имя, которое будет показываться в MAX, когда человек пишет из TG. Файл нужен на TG-машине. ID можно узнать через [@userinfobot](https://t.me/userinfobot).
 
 ```json
 {
@@ -105,39 +160,12 @@ ID берётся из `names.json` который заполняется авт
 }
 ```
 
-TG user ID можно узнать через [@userinfobot](https://t.me/userinfobot).
-
-## Запуск
-
-```bash
-# Обычный режим (двусторонний)
-python3 main.py
-
-# Только Макс → Telegram
-python3 main.py --mute
-```
-
 ## Автозапуск (Linux systemd)
 
-```ini
-# ~/.config/systemd/user/maxforwarder.service
-[Unit]
-Description=MaxForwarder
-After=network.target
+Первый запуск MAX-ноды с входом по QR или SMS сделай руками в консоли, дальше запускай сервисом. Юнит с отдельным пользователем и песочницей лежит в [DEPLOY.md, шаг 8](DEPLOY.md#шаг-8-автозапуск-через-systemd-на-обоих-серверах).
 
-[Service]
-WorkingDirectory= /home/user(Ваш пользователь)/MAX-Forwarder
-ExecStart=/usr/bin/python3 main.py
-Restart=on-failure
-RestartSec=10
+## Заметки
 
-[Install]
-WantedBy=default.target
-```
-
-```bash
-systemctl --user enable --now maxforwarder
-```
-
-
-**Реконнекты каждые ~30 сек** — нормальное поведение, сервер MAX закрывает соединение после каждого сообщения. Сообщения не теряются благодаря `fetch_history` при переподключении.
+- PyMax закреплён на версии `2.4.1`. В ней сломана загрузка голосовых и фото, поэтому в `forwarder/pymax_patches.py` лежат заплатки. Причины багов нашли в [MAX2TG-Bridge](https://github.com/miharoot/MAX2TG-Bridge) и в issues [PyMax#102](https://github.com/MaxApiTeam/PyMax/issues/102), [PyMax#103](https://github.com/MaxApiTeam/PyMax/issues/103). Не обновляй PyMax, не проверив, что они ещё нужны.
+- Правки и удаления сообщений не пересылаются.
+- Эхо собственных пересланных сообщений отсекается автоматически, `MAX_SELF_ID` больше не обязателен.

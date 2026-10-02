@@ -1,0 +1,10 @@
+__pycache__/
+*.pyc
+max_session/
+names.json
+msg_map.json
+*.tmp
+*.pem
+*.key
+*.crt
+config.py
