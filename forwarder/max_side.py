@@ -115,6 +115,7 @@ class MaxSide:
         s = self.s
         work_dir = s.path(s.MAX_WORK_DIR)
         work_dir.mkdir(parents=True, exist_ok=True)
+        work_dir.chmod(0o700)  # там токен сессии MAX
         extra = ExtraConfig(
             token=s.MAX_TOKEN if s.max_auth == "token" else None,
             proxy=s.MAX_PROXY,
@@ -266,7 +267,11 @@ class MaxSide:
 
         async def grab(url):
             try:
-                return await media.download(url, limit)
+                return await media.download(url, limit, self.s.MAX_MEDIA_HOSTS)
+            except media.BadHost as e:
+                log.warning("Не качаю с %s — хоста нет в MAX_MEDIA_HOSTS", e)
+                notes.append("[вложение с неизвестного хоста, не переслано]")
+                return None
             except media.TooBig as e:
                 notes.append(f"[файл больше {self.s.MAX_FILE_MB} МБ, не переслан]")
                 log.info("Пропуск большого файла: %s", e)

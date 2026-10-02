@@ -10,6 +10,7 @@ import argparse
 import asyncio
 import logging
 import signal
+import stat
 import sys
 from pathlib import Path
 
@@ -38,6 +39,7 @@ def build(s: settings_mod.Settings):
         tls_key=str(s.path(s.LINK_TLS_KEY)) if s.LINK_TLS_KEY else "",
         tls_ca=str(s.path(s.LINK_TLS_CA)) if s.LINK_TLS_CA else "",
         proxy=s.LINK_PROXY,
+        allow_ips=s.LINK_ALLOW_IPS,
     )
     if s.ROLE == "tg":
         from forwarder.tg_side import TgSide as Side
@@ -45,6 +47,17 @@ def build(s: settings_mod.Settings):
         from forwarder.max_side import MaxSide as Side
     side = Side(s, link)
     return [side], [link.run(), side.run()]
+
+
+def warn_open_secrets(s: settings_mod.Settings, config: Path) -> None:
+    files = [config] + [s.path(f) for f in (s.LINK_TLS_KEY,) if f]
+    for f in files:
+        try:
+            mode = f.stat().st_mode
+        except OSError:
+            continue
+        if mode & (stat.S_IRWXG | stat.S_IRWXO):
+            log.warning("%s читают другие пользователи — сделай: chmod 600 %s", f.name, f)
 
 
 async def run(s: settings_mod.Settings) -> None:
@@ -93,6 +106,7 @@ def main() -> None:
             print(f"config: {e}", file=sys.stderr)
         sys.exit(1)
 
+    warn_open_secrets(s, Path(args.config))
     print(f"Роль: {s.ROLE}" + (" | 🔇 --mute: TG → MAX отключён" if s.MUTE else ""))
     asyncio.run(run(s))
 

@@ -3,7 +3,8 @@
 from __future__ import annotations
 
 import importlib.util
-from dataclasses import dataclass, fields
+import ipaddress
+from dataclasses import dataclass, field, fields
 from pathlib import Path
 
 ROLES = ("both", "tg", "max")
@@ -24,6 +25,9 @@ class Settings:
     MAX_SKIP_OWN: bool = False
     MAX_WORK_DIR: str = "max_session"
     MAX_PROXY: str | None = None
+    MAX_MEDIA_HOSTS: list[str] = field(
+        default_factory=lambda: ["oneme.ru", "max.ru", "okcdn.ru", "mycdn.me"]
+    )
 
     TG_TOKEN: str = ""
     TG_CHAT_ID: int | str = ""
@@ -36,6 +40,8 @@ class Settings:
     LINK_TLS_KEY: str = ""
     LINK_TLS_CA: str = ""
     LINK_PROXY: str | None = None
+    LINK_ALLOW_IPS: list[str] = field(default_factory=list)
+    LINK_ALLOW_INSECURE: bool = False
 
     base_dir: Path = Path(".")
 
@@ -83,14 +89,32 @@ class Settings:
         if self.ROLE != "both":
             if bool(self.LINK_LISTEN) == bool(self.LINK_URL):
                 errors.append("Для раздельного запуска задай ровно одно: LINK_LISTEN или LINK_URL")
-            if len(self.LINK_SECRET) < 16:
-                errors.append("LINK_SECRET пустой или короче 16 символов")
+            if len(self.LINK_SECRET) < 24:
+                errors.append("LINK_SECRET пустой или короче 24 символов — сгенерируй длинный")
             if bool(self.LINK_TLS_CERT) != bool(self.LINK_TLS_KEY):
                 errors.append("LINK_TLS_CERT и LINK_TLS_KEY задаются вместе")
+            if not self.LINK_ALLOW_INSECURE:
+                if self.LINK_LISTEN and not self.LINK_TLS_CERT:
+                    errors.append(
+                        "Без LINK_TLS_CERT/LINK_TLS_KEY связка пойдёт открытым текстом. "
+                        "Если она и так внутри SSH/WireGuard-туннеля — LINK_ALLOW_INSECURE = True"
+                    )
+                if self.LINK_URL and not self.LINK_URL.startswith("wss://"):
+                    errors.append("LINK_URL должен быть wss://… (или LINK_ALLOW_INSECURE = True для туннеля)")
+            for net in self.LINK_ALLOW_IPS:
+                try:
+                    ipaddress.ip_network(str(net), strict=False)
+                except ValueError:
+                    errors.append(f"LINK_ALLOW_IPS: {net!r} — не IP и не подсеть")
         return errors
 
 
 def load(config_path: Path, role_override: str | None = None, mute: bool = False) -> Settings:
+    if not config_path.exists():
+        example = config_path.with_name("config.example.py")
+        raise SystemExit(
+            f"Нет {config_path.name}. Скопируй шаблон: cp {example.name} {config_path.name}"
+        )
     spec = importlib.util.spec_from_file_location("forwarder_user_config", config_path)
     if spec is None or spec.loader is None:
         raise SystemExit(f"Не могу прочитать {config_path}")

@@ -80,22 +80,38 @@ class TooBig(Exception):
     pass
 
 
-async def download(url: str, limit: int, timeout: float = 300) -> bytes:
-    """Скачивает файл с CDN MAX. Бросает TooBig, если больше limit байт."""
-    # okcdn подписывает URL как есть — yarl не должен его перекодировать
-    target = URL(url, encoded=True) if ".okcdn.ru" in url else url
+class BadHost(Exception):
+    pass
+
+
+def check_host(url: str, allowed: list[str]) -> None:
+    """Качаем только по https и только с CDN MAX — чтобы чужой URL не увёл запрос куда попало."""
+    u = URL(url)
+    host = (u.host or "").lower().rstrip(".")
+    if u.scheme != "https" or not any(host == h or host.endswith("." + h) for h in allowed):
+        raise BadHost(f"{u.scheme}://{host}")
+
+
+async def download(url: str, limit: int, allowed_hosts: list[str], timeout: float = 300) -> bytes:
+    """Скачивает файл с CDN MAX. TooBig — если больше limit, BadHost — если чужой хост."""
     headers = {"User-Agent": BROWSER_UA, "Referer": "https://web.max.ru/"}
-    async with (
-        aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=timeout)) as session,
-        session.get(target, headers=headers) as resp,
-    ):
-        resp.raise_for_status()
-        if resp.content_length and resp.content_length > limit:
-            raise TooBig(resp.content_length)
-        chunks, total = [], 0
-        async for chunk in resp.content.iter_chunked(256 * 1024):
-            total += len(chunk)
-            if total > limit:
-                raise TooBig(total)
-            chunks.append(chunk)
-        return b"".join(chunks)
+    async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=timeout)) as session:
+        for _ in range(5):  # редиректы проверяем сами
+            check_host(url, allowed_hosts)
+            # okcdn подписывает URL как есть — yarl не должен его перекодировать
+            target = URL(url, encoded=True) if ".okcdn.ru" in url else url
+            async with session.get(target, headers=headers, allow_redirects=False) as resp:
+                if resp.status in (301, 302, 303, 307, 308) and resp.headers.get("Location"):
+                    url = str(URL(url).join(URL(resp.headers["Location"])))
+                    continue
+                resp.raise_for_status()
+                if resp.content_length and resp.content_length > limit:
+                    raise TooBig(resp.content_length)
+                chunks, total = [], 0
+                async for chunk in resp.content.iter_chunked(256 * 1024):
+                    total += len(chunk)
+                    if total > limit:
+                        raise TooBig(total)
+                    chunks.append(chunk)
+                return b"".join(chunks)
+    raise aiohttp.ClientError("Слишком много редиректов")

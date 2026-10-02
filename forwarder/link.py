@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import asyncio
 import hmac
+import ipaddress
 import json
 import logging
 import secrets
@@ -113,6 +114,7 @@ class WsLink:
         tls_key: str = "",
         tls_ca: str = "",
         proxy: str | None = None,
+        allow_ips: list[str] | None = None,
     ) -> None:
         self.role = role
         self.secret = secret
@@ -120,6 +122,7 @@ class WsLink:
         self.url = url
         self.tls_cert, self.tls_key, self.tls_ca = tls_cert, tls_key, tls_ca
         self.proxy = proxy
+        self.allow_ips = [ipaddress.ip_network(str(n), strict=False) for n in allow_ips or []]
         self.receiver: Receiver | None = None
 
         self.instance = secrets.token_hex(8)
@@ -187,6 +190,10 @@ class WsLink:
         if data[0] == _FULL:
             return data[1:]
         msg_id, idx, total = struct.unpack_from(">QII", data, 1)
+        if total * CHUNK > MAX_EVENT + CHUNK:
+            raise ValueError(f"Кадр из {total} кусков — больше лимита")
+        if idx == 0:  # куски одного кадра идут подряд, старые недособранные не нужны
+            self._parts.clear()
         parts = self._parts.setdefault(msg_id, [])
         if idx != len(parts):  # куски идут строго по порядку в одном соединении
             self._parts.pop(msg_id, None)
@@ -271,9 +278,11 @@ class WsLink:
 
     async def _run_server(self) -> None:
         host, _, port = self.listen.rpartition(":")
+        host = host.strip("[]")
         ssl_ctx = None
         if self.tls_cert:
             ssl_ctx = ssl.create_default_context(ssl.Purpose.CLIENT_AUTH)
+            ssl_ctx.minimum_version = ssl.TLSVersion.TLSv1_2
             ssl_ctx.load_cert_chain(self.tls_cert, self.tls_key)
 
         app = web.Application()
@@ -289,7 +298,21 @@ class WsLink:
         finally:
             await runner.cleanup()
 
+    def _ip_allowed(self, remote: str | None) -> bool:
+        if not self.allow_ips:
+            return True
+        try:
+            ip = ipaddress.ip_address(remote or "")
+        except ValueError:
+            return False
+        if ip.version == 6 and ip.ipv4_mapped:  # ::ffff:1.2.3.4 при прослушке на ::
+            ip = ip.ipv4_mapped
+        return any(ip in net for net in self.allow_ips)
+
     async def _handle(self, request: web.Request) -> web.StreamResponse:
+        if not self._ip_allowed(request.remote):
+            log.warning("Отбил подключение с %s — нет в LINK_ALLOW_IPS", request.remote)
+            return web.Response(status=403)
         auth = request.headers.get("Authorization", "")
         if not hmac.compare_digest(auth.encode(), f"Bearer {self.secret}".encode()):
             log.warning("Отбил подключение с неверным секретом от %s", request.remote)
@@ -309,6 +332,7 @@ class WsLink:
             # Свой самоподписанный сертификат: доверяем только ему, имя не проверяем
             ssl_arg = ssl.create_default_context(cafile=self.tls_ca)
             ssl_arg.check_hostname = False
+            ssl_arg.minimum_version = ssl.TLSVersion.TLSv1_2
         headers = {"Authorization": f"Bearer {self.secret}"}
         delay = 1.0
         async with aiohttp.ClientSession() as session:
@@ -327,6 +351,8 @@ class WsLink:
                 except aiohttp.WSServerHandshakeError as e:
                     if e.status == 401:
                         log.error("Сервер связи отверг LINK_SECRET — проверь, что он одинаковый")
+                    elif e.status == 403:
+                        log.error("Сервер связи не пускает этот IP — проверь LINK_ALLOW_IPS на той стороне")
                     else:
                         log.warning("Не подключиться к %s: %s", self.url, e)
                 except (aiohttp.ClientError, OSError, asyncio.TimeoutError, ConnectionError) as e:

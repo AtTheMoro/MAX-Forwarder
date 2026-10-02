@@ -60,12 +60,13 @@ ROLE = "tg" + ROLE = "max" — две машины:
 git clone https://github.com/AtTheMoro/MAX-Forwarder
 cd MAX-Forwarder
 pip install -r requirements.txt
+cp config.example.py config.py && chmod 600 config.py
 sudo apt install ffmpeg      # Debian/Ubuntu; на macOS: brew install ffmpeg
 ```
 
 ## Настройка
 
-Все настройки в `config.py`, каждая подписана. Минимум зависит от роли:
+Все настройки в `config.py` (копия `config.example.py`, в git не попадает), каждая подписана. Минимум зависит от роли:
 
 | Роль | Что заполнить |
 |---|---|
@@ -108,51 +109,33 @@ python3 main.py --mute     # только MAX → Telegram
 
 ## Запуск на двух машинах (TG за рубежом, MAX в РФ)
 
-Обычно слушает зарубежный сервер (у него белый IP), а машина в РФ сама к нему подключается — тогда в РФ белый IP не нужен.
+**Пошаговый гайд с безопасной настройкой — [DEPLOY.md](DEPLOY.md).** Там же расписано, как всё работает. Коротко:
 
-**1. Общий секрет** (один и тот же на обеих машинах):
+1. Зарубежный сервер A слушает порт (`ROLE = "tg"`, `LINK_LISTEN`). Машина в РФ B сама к нему подключается (`ROLE = "max"`, `LINK_URL`). На B входящие порты не нужны.
+2. Связка идёт только по TLS. Сертификат самоподписанный, B доверяет только ему (`LINK_TLS_CA`), так что подменить сервер нельзя.
+3. Дальше три замка: общий секрет на 256 бит (`LINK_SECRET`), белый список IP (`LINK_ALLOW_IPS`) и фаервол на A.
+4. Каждый сервер запускается под отдельным пользователем в systemd-песочнице.
 
-```bash
-python3 -c "import secrets; print(secrets.token_urlsafe(32))"
-```
-
-**2. Зарубежный сервер, TLS-сертификат** для шифрования связки:
-
-```bash
-openssl req -x509 -newkey rsa:2048 -nodes -days 3650 \
-  -keyout link.key -out link.crt -subj "/CN=max-forwarder"
-```
-
-`link.crt` скопируй на машину в РФ (`link.key` — никуда не копировать).
-
-**3. `config.py` на зарубежном сервере:**
+Пример конфигов:
 
 ```python
+# A — за рубежом
 ROLE = "tg"
 TG_TOKEN = "1234567890:AAF..."
 TG_CHAT_ID = "-100123456789"
-LINK_LISTEN = "0.0.0.0:8765"
-LINK_SECRET = "тот-самый-секрет"
+LINK_LISTEN = "0.0.0.0:8443"
+LINK_SECRET = "секрет"            # python3 -c "import secrets; print(secrets.token_urlsafe(32))"
 LINK_TLS_CERT = "link.crt"
 LINK_TLS_KEY = "link.key"
-```
+LINK_ALLOW_IPS = ["B.B.B.B"]
 
-Открой порт в фаерволе: `sudo ufw allow 8765/tcp`. Если связку режут — повесь на `443`.
-
-**4. `config.py` на машине в РФ:**
-
-```python
+# B — в РФ
 ROLE = "max"
 MAX_CHAT_ID = -54321098765432
-MAX_TOKEN = ""            # пусто = вход по QR
-LINK_URL = "wss://IP_ЗАРУБЕЖНОГО_СЕРВЕРА:8765/link"
-LINK_SECRET = "тот-самый-секрет"
-LINK_TLS_CA = "link.crt"  # доверяем только своему сертификату
+LINK_URL = "wss://A.A.A.A:8443/link"
+LINK_SECRET = "секрет"
+LINK_TLS_CA = "link.crt"          # копия сертификата с A (без ключа!)
 ```
-
-**5. Запуск** — на каждой машине просто `python3 main.py` (роль берётся из конфига, либо `--role tg` / `--role max`). Порядок запуска не важен, MAX-нода будет стучаться, пока не подключится. В логах обеих появится «Связь с …-нодой есть».
-
-Если наоборот белый IP только у машины в РФ — поменяй местами: `LINK_LISTEN` + сертификат на ней, `LINK_URL` + `LINK_TLS_CA` на зарубежной.
 
 ## Кастомные имена
 
@@ -179,30 +162,7 @@ LINK_TLS_CA = "link.crt"  # доверяем только своему серт�
 
 ## Автозапуск (Linux systemd)
 
-Первый запуск MAX-ноды с входом по QR/SMS сделай руками в консоли, дальше — сервисом.
-
-```ini
-# ~/.config/systemd/user/maxforwarder.service
-[Unit]
-Description=MaxForwarder
-After=network-online.target
-
-[Service]
-WorkingDirectory=/home/ТВОЙ_ЮЗЕР/MAX-Forwarder
-ExecStart=/usr/bin/python3 main.py
-Restart=on-failure
-RestartSec=10
-Environment=PYTHONUNBUFFERED=1
-
-[Install]
-WantedBy=default.target
-```
-
-```bash
-systemctl --user enable --now maxforwarder
-loginctl enable-linger $USER   # чтобы работало без активной сессии
-journalctl --user -u maxforwarder -f
-```
+Первый запуск MAX-ноды с входом по QR или SMS сделай руками в консоли, дальше запускай сервисом. Юнит с отдельным пользователем и песочницей лежит в [DEPLOY.md, шаг 8](DEPLOY.md#шаг-8-автозапуск-через-systemd-на-обоих-серверах).
 
 ## Заметки
 
